@@ -8,7 +8,10 @@
 到底能不能让外面的模组用起来，这个仓库就是答案。
 
 - Minecraft 1.21.1 / NeoForge 21.1.248（与本体同版）
-- 前置：MCphone 1.8.18+
+- 前置：MCphone **1.8.19+**。不放宽到 1.8.18：那一版的 SPI 扫描用了单参的
+  `ServiceLoader.load`，拿的是线程 context classloader，而扫描跑在并行模组派发的
+  worker 上，赶上一个看不见 `META-INF/services` 的就一个 App 都扫不到、还不报错。
+  丢的是全部 App，但玩家只会认为是刚装的这个附属坏了。本体 v1.8.19 已修
 - 只有客户端。服务端一个字节都不参与
 
 ---
@@ -142,7 +145,7 @@ python3 docs/make_icon.py && ./gradlew build
 ./gradlew runClient      # 开发环境（会自动带上 libs/ 里的 MCphone）
 ```
 
-编译对着 `libs/mcphone-1.8.18.jar`。换本体版本时**两处都要改**：把新 jar 放进
+编译对着 `libs/mcphone-1.8.19.jar`。换本体版本时**两处都要改**：把新 jar 放进
 `libs/`，同时改 `gradle.properties` 里的 `mcphone_version`——那个数同时拼出
 文件名和 `mods.toml` 里的 versionRange 下限，对不上就会出现"编译对着新版、
 运行时却宣称支持旧版"这种最难查的错配。
