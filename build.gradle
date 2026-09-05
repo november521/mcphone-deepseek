@@ -1,0 +1,100 @@
+plugins {
+    id 'java-library'
+    id 'net.neoforged.moddev' version '2.0.143'
+    id 'idea'
+}
+
+version = mod_version
+group = mod_group_id
+
+base {
+    archivesName = mod_id
+}
+
+// Mojang 在 1.21.1 发给玩家的是 Java 21，模组就得对着 21 编。
+java.toolchain.languageVersion = JavaLanguageVersion.of(21)
+
+neoForge {
+    version = project.neo_version
+
+    parchment {
+        mappingsVersion = project.parchment_mappings_version
+        minecraftVersion = project.parchment_minecraft_version
+    }
+
+    runs {
+        client {
+            client()
+        }
+
+        // 没有 server 运行配置。
+        //
+        // 这不是省事：本模组【只有客户端】的东西。IPhoneApp 的签名里有
+        // GuiGraphics，实现类只能在客户端加载；HTTP 请求也是玩家自己那台
+        // 机器发的，服务端一个字节都不该碰。留一个开不起来的 server 配置，
+        // 只会让人以为这里有服务端逻辑。
+        //
+        // mods.toml 里那条 side="CLIENT" 才是真正生效的声明，这里只是不
+        // 提供一个误导人的入口。
+
+        configureEach {
+            systemProperty 'forge.logging.markers', 'REGISTRIES'
+            logLevel = org.slf4j.event.Level.DEBUG
+        }
+    }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
+}
+
+// localRuntime：开发环境里【真的】装上，但不传播给下游。
+// 本体是 compileOnly + localRuntime 而不是 implementation —— 写成
+// implementation 会试图把 MCphone 打包进我们的 jar，那是灾难。
+configurations {
+    runtimeClasspath.extendsFrom localRuntime
+}
+
+dependencies {
+    // MCphone 本体。硬前置：没有它这个模组一个类都跑不起来。
+    //
+    // 走 files() 而不是 maven 坐标，因为本体没有公开 maven。
+    // 版本号来自 gradle.properties，与 mods.toml 里写的下限是同一个数。
+    compileOnly files("libs/mcphone-${mcphone_version}.jar")
+    localRuntime files("libs/mcphone-${mcphone_version}.jar")
+}
+
+// 资源模板：把 gradle.properties 里的版本号填进 neoforge.mods.toml。
+// 和本体同一套做法，理由见本体 gradle.properties 里那段关于中文的注释——
+// 描述文本写在模板里，不写在 properties 里。
+var generateModMetadata = tasks.register("generateModMetadata", ProcessResources) {
+    var replaceProperties = [
+            minecraft_version      : minecraft_version,
+            minecraft_version_range: minecraft_version_range,
+            neo_version            : neo_version,
+            neo_version_range      : neo_version_range,
+            loader_version_range   : loader_version_range,
+            mod_id                 : mod_id,
+            mod_name               : mod_name,
+            mod_license            : mod_license,
+            mod_version            : mod_version,
+            mod_authors            : mod_authors,
+            mcphone_version        : mcphone_version,
+    ]
+    inputs.properties replaceProperties
+    expand replaceProperties
+    from "src/main/templates"
+    into "build/generated/sources/modMetadata"
+}
+sourceSets.main.resources.srcDir generateModMetadata
+neoForge.ideSyncTask generateModMetadata
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.withType(ProcessResources).configureEach {
+    filteringCharset = 'UTF-8'
+}

@@ -1,0 +1,62 @@
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="${mod_license}"
+
+issueTrackerURL="https://github.com/november521/mcphone/issues"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+displayURL="https://github.com/november521/mcphone"
+authors="${mod_authors}"
+
+# 描述写在这里而不是 gradle.properties。
+#
+# Gradle 读 properties 走 java.util.Properties，那个规范定死了 ISO-8859-1
+# 解码，中文取出来就已经是乱码了 —— 在 processResources 之前就坏了，给
+# expand 设 filteringCharset 也救不回来。本体在 1.20.1 那一支上踩过这个坑。
+description='''
+把 DeepSeek 装进 MCphone。一个照着网页版做的对话 App：流式逐字输出、
+可折叠的深度思考过程、Markdown 排版、多会话历史，全部画在手机屏幕里。
+
+API Key 存在你自己的电脑上，请求由你自己的客户端直接发往 DeepSeek，
+服务端不参与、也看不到任何一个字。
+
+An unofficial DeepSeek client as an MCphone app: streaming replies, collapsible
+reasoning, Markdown rendering and saved conversations — all rendered inside the
+in-game phone. Your API key never leaves your machine.
+'''
+
+[[dependencies.${mod_id}]]
+    modId="neoforge"
+    type="required"
+    versionRange="${neo_version_range}"
+    ordering="NONE"
+    side="CLIENT"
+
+[[dependencies.${mod_id}]]
+    modId="minecraft"
+    type="required"
+    versionRange="${minecraft_version_range}"
+    ordering="NONE"
+    side="CLIENT"
+
+# MCphone 本体 —— 硬前置。
+#
+# ordering 必须是 AFTER：我们要往它的 App 目录里塞东西，那个注册表得先就位。
+#
+# versionRange 的下限与编译用的 jar 是同一个数（gradle.properties 里的
+# mcphone_version）。本体那边刻意把编译版和运行时下限解耦，我们这里【不】
+# 学它：本体是"API 的提供方"，放宽下限是它在承诺自己的老版本也够用；我们
+# 是使用方，宣称支持一个从没编译验证过的旧版本，只会把 NoSuchMethodError
+# 留给玩家。要放宽，就换那个版本的 jar 重编一遍再改这里。
+#
+# side="CLIENT"：本模组只有客户端的东西，见 build.gradle 里那段。
+[[dependencies.${mod_id}]]
+    modId="mcphone"
+    type="required"
+    reason="本模组是 MCphone 的附属，它提供手机本身与 App 接口"
+    versionRange="[${mcphone_version},)"
+    ordering="AFTER"
+    side="CLIENT"
