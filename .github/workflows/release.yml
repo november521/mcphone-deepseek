@@ -89,6 +89,17 @@ jobs:
           echo "jar_path=$JAR_PATH" >> "$GITHUB_OUTPUT"
           echo "jar_path=$JAR_PATH"
 
+          # 下面几个给建 Release 和发布到 CurseForge 的步骤用。
+          # 发布那步是 YAML 里的 with:，跑不了 shell，只能在这儿把值取出来。
+          echo "mod_version=$MOD_VERSION" >> "$GITHUB_OUTPUT"
+          # minecraft_version 不会误匹配 minecraft_version_range —— 正则要求
+          # 名字后面紧跟等号。
+          MC_VERSION=$(grep -E '^minecraft_version=' gradle.properties | cut -d= -f2- | tr -d '[:space:]')
+          echo "mc_version=$MC_VERSION" >> "$GITHUB_OUTPUT"
+          # mod_name 有空格，所以只去掉行尾空白，不能像版本号那样 tr -d 全部空白。
+          MOD_NAME=$(grep -E '^mod_name=' gradle.properties | cut -d= -f2- | sed -E 's/[[:space:]]+$//')
+          echo "mod_name=$MOD_NAME" >> "$GITHUB_OUTPUT"
+
       # 同名 tag 已有 Release 时先删掉，否则下面的 gh release create 会直接失败。
       # 语义是"重推 tag ＝ 重新出这个版本"：强推同名 tag 本身已是明确的破坏性
       # 动作，不会误触。只删与本次 tag 同名的那一个，不碰其他版本。
@@ -109,10 +120,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           JAR_PATH: ${{ steps.find-jar.outputs.jar_path }}
+          MOD_NAME: ${{ steps.find-jar.outputs.mod_name }}
         run: |
-          # 标题从 mod_name 取，不写死。mod_name 有空格，所以只去掉行尾空白，
-          # 不能像版本号那样 tr -d 全部空白。
-          MOD_NAME=$(grep -E '^mod_name=' gradle.properties | cut -d= -f2- | sed -E 's/[[:space:]]+$//')
           NOTES_FILE="docs/release-notes/${GITHUB_REF_NAME}.md"
           TITLE="${MOD_NAME} ${GITHUB_REF_NAME}"
           if [ -f "$NOTES_FILE" ]; then
@@ -123,20 +132,105 @@ jobs:
             gh release create "$GITHUB_REF_NAME" "$JAR_PATH" --title "$TITLE" --generate-notes
           fi
 
-      # ---------------- 关于发布到 Modrinth / CurseForge ----------------
+      # ---------------- 发布到 CurseForge ----------------
       #
-      # 【故意没有这一段】。本体的 release.yml 里有，用 Kira-NT/mc-publish
-      # 往两个平台发；照抄过来会用错项目：MODRINTH_ID 那个变量在本体仓库里
-      # 指的是本体的项目（b6VR9Ywe），附属要发就得有自己的项目 ID 和令牌，
-      # 而那个项目还没建。
+      # 用 Kira-NT/mc-publish，与本体同一个。作者改过名，网上大量教程写的还是
+      # Kir-Antipov/mc-publish —— 那个地址目前靠 GitHub 的仓库重定向还能用，
+      # 但重定向会在原名被别人注册时失效，所以这里写现在的名字。
+      # 版本钉死在 v3.3.1 而不是 v3：v3 是会移动的 tag，作者一推新版，
+      # 我们这边就在毫无改动的情况下换了行为。
       #
-      # 真要加的时候：先在 Modrinth 上把附属项目建出来，再到
+      # 【两个配置项都在 GitHub 网页上填，不改这个文件】：
       #   仓库 → Settings → Secrets and variables → Actions
-      #     Variables 页：MODRINTH_ID      （项目 ID，公开信息）
-      #     Secrets 页：  MODRINTH_TOKEN   （令牌，绝不能进仓库）
-      # 填好之后，把本体 release.yml 里 "Check publishing credentials" 起
-      # 到结尾那几步搬过来即可——那边缺凭据是跳过并留 warning，不会让整次
-      # 发版判失败，这个行为对附属同样合适。
+      #     Variables 页：CURSEFORGE_ID     （项目 ID，公开信息）
+      #     Secrets 页：  CURSEFORGE_TOKEN  （令牌，绝不能进仓库）
       #
-      # 附属还多一条本体没有的约束：它对本体是硬前置，Modrinth 上要把
-      # MCphone 标成 required 依赖，否则玩家单独装它会直接崩在加载阶段。
+      # 【CURSEFORGE_ID 必须是附属自己的项目 ID】。令牌是账号级的，与本体那个
+      # 是同一个值，照抄没问题；项目 ID 不是 —— 填成本体的 1681807，附属的 jar
+      # 会传到本体的项目下去。而这个错 check-publishing.yml 挡不住：它验的是
+      # "这个 ID 存不存在"，本体的 ID 当然存在。
+      - name: Check publishing credentials
+        id: creds
+        # 令牌只在这一步进环境，不挂到 job 级 env 上 —— 那样上面每一步
+        # （包括 ./gradlew build 跑的一堆第三方插件）都能读到它。
+        env:
+          CURSEFORGE_ID: ${{ vars.CURSEFORGE_ID }}
+          CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
+        run: |
+          # 缺凭据就跳过并留一条 warning，不让整次发版判失败：GitHub Release
+          # 此时已经建好了，为一个还没配的令牌把它标成红叉，只会让人误以为
+          # 发出去的包有问题。warning 在 Actions 页面上是黄色的一行，不至于
+          # 悄没声地跳过。
+          if [ -n "$CURSEFORGE_ID" ] && [ -n "$CURSEFORGE_TOKEN" ]; then
+            echo "curseforge=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "curseforge=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::跳过 CurseForge：变量 CURSEFORGE_ID 或密钥 CURSEFORGE_TOKEN 没配"
+          fi
+
+      - name: Prepare changelog for mod sites
+        id: changelog
+        if: steps.creds.outputs.curseforge == 'true'
+        run: |
+          # 上面建 Release 时没有说明文件可以退回 --generate-notes，
+          # CurseForge 没有那个东西：changelog 留空，版本页就真的是一片空白。
+          # 所以这里保证【总有一个文件】，最差也是一条指回 Release 的链接。
+          NOTES_FILE="docs/release-notes/${GITHUB_REF_NAME}.md"
+          if [ ! -f "$NOTES_FILE" ]; then
+            NOTES_FILE="build/publish-changelog.md"
+            echo "完整更新内容见 https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}" > "$NOTES_FILE"
+            echo "::warning::未找到 docs/release-notes/${GITHUB_REF_NAME}.md，CurseForge 的更新日志只会有一条 Release 链接"
+          fi
+          echo "file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to CurseForge
+        if: steps.creds.outputs.curseforge == 'true'
+        uses: Kira-NT/mc-publish@v3.3.1
+        with:
+          curseforge-id: ${{ vars.CURSEFORGE_ID }}
+          curseforge-token: ${{ secrets.CURSEFORGE_TOKEN }}
+          # 【不传 github-token】：Release 上面已经用 gh 建好并挂好 jar 了，
+          # 再让它插一手就是重复上传。这个输入没有默认值，不写即不发。
+          #
+          # 【按确切文件名传，不用它默认的 build/libs/*.jar 通配】——
+          # 理由与 find-jar 那步同一个：挑错就是把旧版本发到平台上，
+          # 而那边不像 GitHub，删了重发会留下痕迹、玩家可能已经下过。
+          files: ${{ steps.find-jar.outputs.jar_path }}
+          name: ${{ steps.find-jar.outputs.mod_name }} ${{ github.ref_name }}
+          version: ${{ steps.find-jar.outputs.mod_version }}
+          version-type: release
+          changelog-file: ${{ steps.changelog.outputs.file }}
+          loaders: neoforge
+          game-versions: ${{ steps.find-jar.outputs.mc_version }}
+          java: 21
+          # 【刻意声明"没有依赖"】，空串就是这个意思（不写才是"从 jar 里读"）。
+          #
+          # 这一条在附属身上很别扭，得说清楚：本模组对 MCphone 是【硬前置】，
+          # mods.toml 里写着 type="required"，玩家单独装它会崩在加载阶段。
+          # 按理说 CurseForge 上就该标出这个依赖。
+          #
+          # 但不能从 jar 里自动读：CurseForge 是把 modId 原样当 slug 提交，
+          # slug 在那边不存在就【整次上传失败】。我们的 modId 是 "mcphone"，
+          # 而本体在 CurseForge 上的 slug 是不是也叫 mcphone，没有核实过——
+          # 项目 ID 是 1681807，slug 得去项目页面上看。为一条依赖信息赌上
+          # 整次发版不划算。
+          #
+          # 【所以依赖关系先在项目页面上手工建】：CurseForge 项目 →
+          # Relations → 添加 MCphone，类型选 Required Dependency。那是一次性的
+          # 设置，不随每次上传变。等确认了本体的 slug，再照 mc-publish 的语法
+          # （id@version(type)，一行一条）填回这里，把手工那步换掉。
+          dependencies: ''
+
+      # ---------------- 关于 Modrinth ----------------
+      #
+      # 【故意还没有】。本体那边发两个平台，这里目前只接 CurseForge——附属在
+      # Modrinth 上还没有项目。要加的时候：建好项目，填 MODRINTH_ID 变量和
+      # MODRINTH_TOKEN 密钥，再照上面 CurseForge 那两步的样子加一份即可
+      # （creds 那步多判一个平台，publish 单独一步）。
+      #
+      # 【两个平台要分成两步，不要合成一个】：mc-publish 只往"id 与 token 都
+      # 齐了"的平台发，合成一步也能跑，但那样一个平台没配好、或者一个平台挂了，
+      # 另一个就一起发不出去。
+      #
+      # Modrinth 那边依赖可以让它从 jar 自己读：查不到的依赖它 catch 住再
+      # filter 掉，不会连累上传。这一点与 CurseForge 相反。

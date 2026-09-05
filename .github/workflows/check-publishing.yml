@@ -1,0 +1,86 @@
+name: Check publishing credentials
+
+# 手动触发，发版【之前】跑一次，确认 CurseForge 的凭据还有效、我们声称的
+# 版本名在对方的表里都能对上。
+#
+# 为什么做成一个 workflow 而不是本地脚本：要验证令牌就得用它，而用它的地方
+# 应该是它已经在的地方。令牌全程留在 GitHub，不必为了一次检查把它拷来拷去。
+#
+# 这不是发版流程的一环，release.yml 不依赖它。它治的是另一件事：令牌会过期、
+# 会被吊销、ID 会填错，而那些眼下只会在推了 tag、构建跑完之后才暴露出来 ——
+# 那时 GitHub Release 已经建好了。
+on:
+  workflow_dispatch:
+
+# 本体的 CurseForge 项目 ID。这里【只用来排除】——附属绝不该往它上面传。
+env:
+  UPSTREAM_CURSEFORGE_ID: '1681807'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # 一个都不 echo 令牌本身。curl 走请求头而不是 query string —— 后者会
+      # 出现在日志、代理和对方的访问日志里。
+      - name: CurseForge
+        env:
+          CURSEFORGE_ID: ${{ vars.CURSEFORGE_ID }}
+          CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
+        run: |
+          # 【令牌与 ID 分开判】。验令牌、查版本表都不需要项目 ID，把两者绑在
+          # 一起判，就会在"令牌配好了、ID 还没填"这个最需要检查的时刻什么都不查。
+          if [ -z "$CURSEFORGE_TOKEN" ]; then
+            echo "::warning::CURSEFORGE_TOKEN 没配，跳过"; exit 0
+          fi
+
+          # 这个接口本身就要令牌，取得到就说明令牌有效。
+          curl -sS --fail-with-body -H "X-Api-Token: $CURSEFORGE_TOKEN" \
+               https://minecraft.curseforge.com/api/game/versions -o versions.json || {
+            echo "::error::CurseForge 令牌无效"; exit 1; }
+          echo "令牌有效，取到 $(python3 -c 'import json;print(len(json.load(open("versions.json"))))') 条版本记录"
+
+          if [ -z "$CURSEFORGE_ID" ]; then
+            echo "::warning::CURSEFORGE_ID 还没填，发版时 CurseForge 那步会跳过"
+          elif [ "$CURSEFORGE_ID" = "$UPSTREAM_CURSEFORGE_ID" ]; then
+            # 【本体和附属共用同一个账号令牌】，所以填成本体的 ID 不会有任何
+            # 权限报错 —— 附属的 jar 会安安静静地传进本体的项目里，玩家在
+            # MCphone 的文件列表里看到一个 mcphone_deepseek 的包。
+            # 这是这个仓库最可能犯、也最难在事后发现的一个错，单独挡一道。
+            echo "::error::CURSEFORGE_ID 填成了本体 MCphone 的项目 ID（$UPSTREAM_CURSEFORGE_ID）。附属要用它自己的项目 ID。"
+            exit 1
+          else
+            # 拿 localization/export 当"这个 ID 存不存在"用。
+            #
+            # 【它只验存在，不验归属】—— 这一条是本体那边实测出来的：
+            #   不存在的 ID   → 400  {"errorCode":1001,"errorMessage":"Invalid `projectID`."}
+            #   自己的项目     → 403  "You do not have permission to manage localization"
+            #   别人的项目     → 403  一模一样
+            # 本地化管理这个权限对 Minecraft 项目根本没开，所以谁问都是 403。
+            # 能说明问题的是 400。
+            CODE=$(curl -sS -o cf-project.txt -w '%{http_code}' \
+                   -H "X-Api-Token: $CURSEFORGE_TOKEN" \
+                   "https://minecraft.curseforge.com/api/projects/$CURSEFORGE_ID/localization/export")
+            case "$CODE" in
+              400) echo "::error::CURSEFORGE_ID=$CURSEFORGE_ID 不是有效的项目 ID：$(head -c 200 cf-project.txt)"; exit 1 ;;
+              200|403) echo "项目 $CURSEFORGE_ID 存在" ;;
+              # 别为一个没预料到的状态码把整次检查判失败 —— 这一步是辅助，
+              # 不该比它要验的东西本身还容易出假警报。
+              *) echo "::warning::验 $CURSEFORGE_ID 时拿到状态码 $CODE，无法判断，跳过这一项" ;;
+            esac
+          fi
+
+          # release.yml 里声称的那几样，逐个确认对方表里有。
+          # 对不上就是发版当场失败的那种错，宁可在这里先看见。
+          # 附属只有一支（NeoForge 1.21.1 / Java 21），比本体少一半。
+          python3 - <<'PY'
+          import json, sys
+          vs = json.load(open("versions.json"))
+          names = {v["name"] for v in vs}
+          want = ["1.21.1", "NeoForge", "Java 21"]
+          missing = [w for w in want if w not in names]
+          for w in want:
+              print(f'  {"OK  " if w in names else "缺失"}  {w}')
+          if missing:
+              print(f'::error::CurseForge 版本表里没有：{", ".join(missing)}')
+              sys.exit(1)
+          PY
