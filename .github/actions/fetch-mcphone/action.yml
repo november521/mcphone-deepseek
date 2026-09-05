@@ -1,0 +1,50 @@
+name: Fetch MCphone
+description: 把 MCphone 本体的 jar 下载到 libs/，供编译使用。
+
+# 抽成 composite action 而不是在两份 workflow 里各抄一遍：build 和 release
+# 都必须先有这个 jar 才能编译，抄两份的话改了一边忘了另一边，症状是发版时
+# 编译失败——那是最不想在推完 tag 之后才发现的事。
+
+inputs:
+  github-token:
+    description: 读取本体仓库 Release 用的令牌。本体是公开仓库，默认的 GITHUB_TOKEN 就够。
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Download MCphone jar into libs/
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+      run: |
+        # libs/*.jar 被 .gitignore 挡在仓库外（本体是别的仓库的产物，不该跟着
+        # 这个仓库走），所以 CI 的全新检出里【一定】没有它，必须在这里取。
+        # 本地开发是按 README 手工放进去的，两条路取到的是同一个文件。
+        MCPHONE_VERSION=$(grep -E '^mcphone_version=' gradle.properties | cut -d= -f2- | tr -d '[:space:]')
+        JAR="mcphone-${MCPHONE_VERSION}.jar"
+        echo "需要本体 jar：$JAR"
+
+        # 【按资产文件名找，不去猜 tag 名】。本体的 tag 命名换过：早期是
+        # v1.8.9，1.8.18 那次是 neoforge-v1.8.18，现在又回到 v1.8.19。
+        # 从 mcphone_version 拼 tag 的写法迟早会在某个版本上落空，而资产名
+        # 是 build.gradle 里 files("libs/mcphone-${mcphone_version}.jar")
+        # 要的那个名字本身——它对不上就是真的编不了，不存在猜错的余地。
+        TAG=$(gh api repos/november521/mcphone/releases --paginate \
+          --jq ".[] | select(any(.assets[]; .name == \"$JAR\")) | .tag_name" | head -1)
+
+        if [ -z "$TAG" ]; then
+          echo "::error::本体仓库 november521/mcphone 的 Release 里没有名为 $JAR 的资产。"
+          echo "::error::要么 gradle.properties 里的 mcphone_version 写错了，要么本体那个版本还没发布。"
+          exit 1
+        fi
+
+        echo "在本体 Release $TAG 里找到 $JAR"
+        mkdir -p libs
+        gh release download "$TAG" \
+          --repo november521/mcphone \
+          --pattern "$JAR" \
+          --dir libs \
+          --clobber
+
+        ls -la libs/

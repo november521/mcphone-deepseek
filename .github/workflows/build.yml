@@ -1,0 +1,77 @@
+name: Build & Upload
+
+# 这个仓库是 MCphone 的附属（DeepSeek App），只有一支：NeoForge 1.21.1。
+# 本体那边是每个 Minecraft 版本 / 加载器各占一个分支，这里没有那个必要，
+# 所以下面的分支列表和 tag 命名都不带加载器前缀。
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v6
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      # 【停在 v5，不要升 v6】。v6 把缓存那部分抽成了 gradle-actions-caching，
+      # 那是个不再开源的商业组件，启用缓存就等于接受 Gradle 自己那份
+      # Terms of Use（https://gradle.com/legal/terms-of-use/）。一个 MIT 的
+      # 模组仓库不该在顺手修个告警的时候，把自己绑上另一份条款。
+      #
+      # 与本体仓库同一个决定，改的时候两边一起改。
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v5
+
+      # 必须在 build 之前。本体 jar 是硬前置，缺了它一个类都编不过。
+      - name: Fetch MCphone
+        uses: ./.github/actions/fetch-mcphone
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew build
+
+      - name: Find built JAR
+        id: find-jar
+        run: |
+          # 【按确切文件名取，不要 find | head -1】。
+          #
+          # 眼下 CI 是全新检出、build/libs 里只有一个 jar，head -1 挑不错。
+          # 但那是"碰巧"，不是"保证"——挑错的后果是发出一个旧版本或残缺包，
+          # 而构建全绿、测试全绿，没有任何东西会告诉你。
+          #
+          # 名字的两截各有唯一真值：mod_id 是 build.gradle 里
+          # archivesName 的取值，mod_version 是这次构建的版本。都从
+          # gradle.properties 读，就不会与构建脚本失配。
+          MOD_ID=$(grep -E '^mod_id=' gradle.properties | cut -d= -f2- | tr -d '[:space:]')
+          MOD_VERSION=$(grep -E '^mod_version=' gradle.properties | cut -d= -f2- | tr -d '[:space:]')
+          JAR_PATH="build/libs/${MOD_ID}-${MOD_VERSION}.jar"
+          if [ ! -f "$JAR_PATH" ]; then
+            echo "::error::没找到 $JAR_PATH。build/libs 下现有："
+            ls -la build/libs || true
+            exit 1
+          fi
+          echo "jar_path=$JAR_PATH" >> "$GITHUB_OUTPUT"
+          echo "jar_name=$(basename "$JAR_PATH")" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.find-jar.outputs.jar_name }}
+          path: ${{ steps.find-jar.outputs.jar_path }}
+          retention-days: 30
