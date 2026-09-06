@@ -362,18 +362,23 @@ final class ChatView implements View {
         scrollPx = Math.clamp(scrollPx, 0, maxScroll);
 
         // 不足一屏就从顶往下排；超出时贴底，scrollPx 把内容往下推露出更早的
-        int y = contentH <= viewH ? top : bottom - contentH + scrollPx;
+        final int startY = contentH <= viewH ? top : bottom - contentH + scrollPx;
 
-        g.enableScissor(x, top, x + w, bottom);
-        for (Laid l : laid) {
-            int h = l.layout().height();
-            if (y + h > top && y < bottom) {
-                l.layout().draw(g, font, x, y, w);
-                if (l.live()) drawCaret(g, font, l.layout(), x, y, theme);
+        // 走 canvas.clipped 而不是 g.enableScissor：原版那句收窗口坐标、且不看 PoseStack，
+        // 而玩家可以在「设置 → 界面大小」里把整个手机放大（本体 1.9.3）。直接把这里的
+        // 手机坐标交给原版，裁剪框就停在 100% 时的位置和大小上，消息被切掉一块——
+        // 而且只在倍数不是 100% 时出现。clipped 会把矩形过一遍当前的变换矩阵
+        c.clipped(x, top, w, bottom - top, () -> {
+            int y = startY;
+            for (Laid l : laid) {
+                int h = l.layout().height();
+                if (y + h > top && y < bottom) {
+                    l.layout().draw(g, font, x, y, w);
+                    if (l.live()) drawCaret(g, font, l.layout(), x, y, theme);
+                }
+                y += h + MSG_GAP;
             }
-            y += h + MSG_GAP;
-        }
-        g.disableScissor();
+        });
 
         // scrollPx 在这一页是"从最新一条往回翻了多远"，而滚动条要的是
         // "距内容顶端多远"——两者正好相反。上一版直接把 scrollPx 传了进去，

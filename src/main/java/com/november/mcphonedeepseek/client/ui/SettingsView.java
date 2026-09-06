@@ -162,17 +162,22 @@ final class SettingsView implements View {
         maxScroll = Math.max(0, contentH - viewH);
         scrollPx = Math.clamp(scrollPx, 0, maxScroll);
 
-        int y = top - scrollPx;
+        final int startY = top - scrollPx;
         editRowY = Integer.MIN_VALUE;
 
-        g.enableScissor(x, top, x + w, bottom);
-        for (Item item : items) {
-            if (y + item.height() > top && y < bottom) {
-                draw(c, theme, item, x, y, w);
+        // 裁剪走 canvas.clipped，理由见 ChatView 里那段注释。
+        // 这一段在 body 里还会写 editRowY（draw 里赋的），所以 clipped 保证 body 一定会跑
+        // 这一条在这里是必需的：矩形退化成空的那一帧要是跳过 body，editRowY 会停在
+        // Integer.MIN_VALUE，那一帧点编辑框就点不中
+        c.clipped(x, top, w, bottom - top, () -> {
+            int y = startY;
+            for (Item item : items) {
+                if (y + item.height() > top && y < bottom) {
+                    draw(c, theme, item, x, y, w);
+                }
+                y += item.height();
             }
-            y += item.height();
-        }
-        g.disableScissor();
+        });
 
         Ui.scrollbar(g, x + w - 1, top, viewH, scrollPx, contentH, viewH,
                 theme.subtle() & 0x60FFFFFF);

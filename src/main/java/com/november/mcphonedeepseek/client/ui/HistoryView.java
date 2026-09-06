@@ -119,16 +119,18 @@ final class HistoryView implements View {
 
         // 这一页从顶往下排，滚动量是"往下翻了多少"——和聊天页相反，
         // 因为列表最要紧的是最新那条，它在最上面
-        int y = top - scrollPx;
+        final int startY = top - scrollPx;
 
-        g.enableScissor(x, top, x + w, bottom);
-        for (Conversation conv : all) {
-            if (y + ROW_H > top && y < bottom) {
-                drawRow(c, theme, conv, x, y, w);
+        // 裁剪走 canvas.clipped，理由见 ChatView 里那段注释
+        c.clipped(x, top, w, bottom - top, () -> {
+            int y = startY;
+            for (Conversation conv : all) {
+                if (y + ROW_H > top && y < bottom) {
+                    drawRow(c, theme, conv, x, y, w);
+                }
+                y += ROW_H;
             }
-            y += ROW_H;
-        }
-        g.disableScissor();
+        });
 
         Ui.scrollbar(g, x + w - 1, top, viewH, scrollPx, contentH, viewH,
                 theme.subtle() & 0x60FFFFFF);
